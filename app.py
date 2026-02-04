@@ -20,7 +20,7 @@ except Exception:  # pragma: no cover
     pytesseract = None
 
 
-APP_TITLE = "Clinical Report Variant Finder + PubMed"
+APP_TITLE = "Summary of MedGenome Report"
 
 def _rows_to_csv(rows: List[Dict[str, str]]) -> str:
     if not rows:
@@ -787,7 +787,7 @@ with tab_single:
         else:
             info = extract_patient_info(text)
 
-            st.subheader("Patient / Report Summary")
+            st.subheader("Patient Short Summary")
             summary_row = {
                 "Patient Name": info.get("patient_name") or "",
                 "Age": info.get("age") or "",
@@ -828,7 +828,7 @@ with tab_single:
                             "Transcript ID": v["transcript_id"],
                             "ClinVar IDs (from PDF)": v["clinvar_ids"],
                             "PubMed IDs (from PDF)": v["pubmed_ids"],
-                            "Evidence": v["evidence"],
+                            "Variant Type": v["evidence"],
                         }
                         for v in variant_blocks
                     ]
@@ -852,7 +852,7 @@ with tab_single:
                             "Transcript ID": "",
                             "ClinVar IDs (from PDF)": info.get("clinvar_ids") or "",
                             "PubMed IDs (from PDF)": info.get("pubmed_ids") or "",
-                            "Evidence": h.raw_line,
+                            "Variant Type": h.raw_line,
                         }
                         for h in hits
                     ]
@@ -1002,7 +1002,7 @@ with tab_multi:
                             "Transcript ID": v["transcript_id"],
                             "ClinVar IDs (from PDF)": v["clinvar_ids"],
                             "PubMed IDs (from PDF)": v["pubmed_ids"],
-                            "Evidence": v["evidence"],
+                            "Variant Type": v["evidence"],
                         }
                     )
             else:
@@ -1026,11 +1026,11 @@ with tab_multi:
                             "Transcript ID": "",
                             "ClinVar IDs (from PDF)": info.get("clinvar_ids") or "",
                             "PubMed IDs (from PDF)": info.get("pubmed_ids") or "",
-                            "Evidence": h.raw_line,
+                            "Variant Type": h.raw_line,
                         }
                     )
 
-        st.subheader("Patient / Report Summary")
+        st.subheader("Patient Short Summary")
         if all_summary_rows:
             st.dataframe(all_summary_rows, use_container_width=True)
             st.download_button(
