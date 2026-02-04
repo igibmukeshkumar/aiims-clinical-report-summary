@@ -91,9 +91,10 @@ class VariantHit:
     raw_line: str
 
 
-GENE_LINE_RE = re.compile(r"^\s*([A-Z0-9]{2,})\b.*?p\.([A-Za-z]{3}\d+[A-Za-z]{3}(?:fsTer\d+)?)")
-PROTEIN_RE = re.compile(r"\bp\.([A-Za-z]{3}\d+[A-Za-z]{3}(?:fsTer\d+)?)\b", re.IGNORECASE)
-CDNA_RE = re.compile(r"c\.\s*([0-9_]+(?:[ACGT]>[ACGT]|ins[ACGT]+|del[ACGT]+|dup[ACGT]+))", re.IGNORECASE)
+GENE_LINE_RE = re.compile(r"^\s*([A-Z0-9]{2,})\b.*?p\.([A-Za-z]{3}\d+[A-Za-z0-9]+)")
+PROTEIN_RE = re.compile(r"\bp\.([A-Za-z]{3}\d+[A-Za-z0-9]+)\b", re.IGNORECASE)
+CDNA_RE = re.compile(r"(?:cDNA\s*change\s*:?\s*)?c\.\s*([0-9_]+[A-Za-z0-9>_]+)", re.IGNORECASE)
+CDNA_INLINE_RE = re.compile(r"c\.\s*([0-9_]+[A-Za-z0-9>_]+)", re.IGNORECASE)
 GENOMIC_RE = re.compile(r"chr\w+:g\.[0-9_]+(?:[ACGT]>[ACGT]|ins[ACGT]+|del[ACGT]+|dup[ACGT]+)", re.IGNORECASE)
 VAF_RE = re.compile(r"(?:Variant Allele Frequency|VAF)\s*[-:]*\s*([0-9.]+%?)", re.IGNORECASE)
 
@@ -101,11 +102,19 @@ NAME_RE = re.compile(r"^([A-Za-z][A-Za-z\s.'-]{1,})$")
 AGE_SEX_RE = re.compile(r"AGE:\s*([0-9]+)\s*years\s*\|\s*Gender:\s*([A-Za-z]+)", re.IGNORECASE)
 DATE_RECEIVED_RE = re.compile(r"Date Received:\s*([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4})", re.IGNORECASE)
 DATE_LINE_RE = re.compile(r"\b[0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4}\b")
+DATE_LINE_RE_2 = re.compile(r"\b[0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4}\b")
+DATE_LINE_RE_3 = re.compile(r"\b[0-9]{1,2}\s+[A-Za-z]{3}\s+[0-9]{4}\b", re.IGNORECASE)
 CLIN_BG_RE = re.compile(r"CLINICAL BACKGROUND\s*:?\s*(.*)", re.IGNORECASE)
 INTERPRETATION_RE = re.compile(r"Interpretation\s*(.+)", re.IGNORECASE)
 EXON_RE = re.compile(r"Exon:\s*([0-9]+)", re.IGNORECASE)
 NUC_CHANGE_RE = re.compile(r"Nucleotide change:\s*(chr\w+:g\.[0-9_]+[A-Za-z0-9>_]+)", re.IGNORECASE)
+GENOMIC_RE = re.compile(r"chr\w+:g\.[0-9_]+[A-Za-z0-9>_]+", re.IGNORECASE)
 TRANSCRIPT_RE = re.compile(r"Transcript ID:\s*([A-Za-z0-9_.-]+)", re.IGNORECASE)
+VAF_RE = re.compile(r"(?:Variant Allele Frequency|VAF)\s*[-:]*\s*([0-9.]+%?)", re.IGNORECASE)
+VARIANT_DEPTH_RE = re.compile(r"Variant Allele Depth/Total depth:\s*([0-9]+/[0-9]+x?)", re.IGNORECASE)
+POP_MAF_RE = re.compile(r"Population MAF:\s*([^;\\n]+(?:;[^\\n]+)?)", re.IGNORECASE)
+INSILICO_RE = re.compile(r"In-silico Predictions:\s*([^\\n]+)", re.IGNORECASE)
+GENE_FUNCTION_RE = re.compile(r"Gene Function:\s*([^\\n]+)", re.IGNORECASE)
 CLINVAR_RE = re.compile(r"\b(?:RCV\d+|SCV\d+|VCV\d+|ClinVar\s*ID\s*:\s*\d+)\b", re.IGNORECASE)
 PMID_RE = re.compile(r"PMID\s*:\s*(\d+)", re.IGNORECASE)
 CLIN_RELEVANCE_RE = re.compile(r"Clinical relevance\s*:?\s*(.*)", re.IGNORECASE)
@@ -301,12 +310,19 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
         gene = m.group(1)
         protein_change = f"p.{m.group(2)}"
         cdna_match = CDNA_RE.search(joined)
+        if cdna_match is None:
+            cdna_match = CDNA_INLINE_RE.search(joined)
         genomic_match = GENOMIC_RE.search(joined)
         vaf_match = VAF_RE.search(joined)
 
         exon = None
         nucleotide_change = None
         transcript_id = None
+        variant_depth = None
+        vaf = vaf_match.group(1) if vaf_match else ""
+        population_maf = None
+        insilico = None
+        gene_function = None
         interpretation = None
         clinical_relevance = None
         clinvar_ids = set()
@@ -329,10 +345,30 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
                 nm = NUC_CHANGE_RE.search(ln)
                 if nm:
                     nucleotide_change = nm.group(1).strip()
+            if nucleotide_change is None:
+                gm = GENOMIC_RE.search(ln)
+                if gm:
+                    nucleotide_change = gm.group(0).strip()
             if transcript_id is None:
                 tm = TRANSCRIPT_RE.search(ln)
                 if tm:
                     transcript_id = tm.group(1).strip()
+            if variant_depth is None:
+                dm = VARIANT_DEPTH_RE.search(ln)
+                if dm:
+                    variant_depth = dm.group(1).strip()
+            if population_maf is None:
+                pm = POP_MAF_RE.search(ln)
+                if pm:
+                    population_maf = pm.group(1).strip()
+            if insilico is None:
+                im2 = INSILICO_RE.search(ln)
+                if im2:
+                    insilico = im2.group(1).strip()
+            if gene_function is None:
+                gf = GENE_FUNCTION_RE.search(ln)
+                if gf:
+                    gene_function = gf.group(1).strip()
             if interpretation is None:
                 im = INTERPRETATION_RE.search(ln)
                 if im:
@@ -391,12 +427,16 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
                 "protein_change": protein_change,
                 "cdna_change": f"c.{cdna_match.group(1)}" if cdna_match else "",
                 "genomic_change": genomic_match.group(0) if genomic_match else "",
-                "vaf": vaf_match.group(1) if vaf_match else "",
+                "vaf": vaf,
                 "interpretation": interpretation or "",
                 "clinical_relevance": clinical_relevance or "",
                 "exon": exon or "",
                 "nucleotide_change": nucleotide_change or "",
                 "transcript_id": transcript_id or "",
+                "variant_depth": variant_depth or "",
+                "population_maf": population_maf or "",
+                "insilico_predictions": insilico or "",
+                "gene_function": gene_function or "",
                 "clinvar_ids": ", ".join(sorted(clinvar_ids)) if clinvar_ids else "",
                 "pubmed_ids": ", ".join(sorted(pubmed_ids)) if pubmed_ids else "",
                 "evidence": block[0],
@@ -421,6 +461,10 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
             "exon",
             "nucleotide_change",
             "transcript_id",
+            "variant_depth",
+            "population_maf",
+            "insilico_predictions",
+            "gene_function",
         ]:
             if not cur.get(field) and v.get(field):
                 cur[field] = v[field]
@@ -445,6 +489,7 @@ def extract_patient_info(text: str) -> Dict[str, Optional[str]]:
         "age": None,
         "sex": None,
         "disease_name": None,
+        "clinical_background_full": None,
         "date_received": None,
         "interpretation": None,
         "exon": None,
@@ -495,7 +540,32 @@ def extract_patient_info(text: str) -> Dict[str, Optional[str]]:
                         break
             break
 
-    # Date Received (same line or next date-like line)
+    # Full Clinical Background block
+    for i, ln in enumerate(lines):
+        if ln.strip().upper() == "CLINICAL BACKGROUND":
+            block = []
+            for j in range(i + 1, len(lines)):
+                nxt = lines[j].strip()
+                if not nxt:
+                    continue
+                upper = nxt.upper()
+                if upper in {
+                    "TEST RESULT SUMMARY",
+                    "ACTIONABLE BIOMARKER DETAILS",
+                    "ADDITIONAL BIOMARKERS DETECTED",
+                    "GLOSSARY",
+                    "REPORT DETAILS",
+                }:
+                    break
+                if re.fullmatch(r"[A-Z0-9\\s/()\\-]+", upper) and len(upper.split()) <= 4:
+                    break
+                block.append(nxt)
+            if block:
+                info["clinical_background_full"] = " ".join(block).strip()
+                info["_sources"]["clinical_background_full"] = " | ".join(block)
+            break
+
+    # Date Received (same line, nearby next/previous date-like line)
     for i, ln in enumerate(lines):
         m = DATE_RECEIVED_RE.search(ln)
         if m:
@@ -503,14 +573,25 @@ def extract_patient_info(text: str) -> Dict[str, Optional[str]]:
             info["_sources"]["date_received"] = ln
             break
         if ln.lower().startswith("date received"):
+            # look ahead
             for j in range(i + 1, min(i + 30, len(lines))):
                 if "report date" in lines[j].lower():
                     continue
-                m2 = DATE_LINE_RE.search(lines[j])
+                m2 = DATE_LINE_RE.search(lines[j]) or DATE_LINE_RE_3.search(lines[j]) or DATE_LINE_RE_2.search(lines[j])
                 if m2:
                     info["date_received"] = m2.group(0)
                     info["_sources"]["date_received"] = lines[j].strip()
                     break
+            # look backward if still empty
+            if not info["date_received"]:
+                for j in range(max(0, i - 10), i):
+                    if "report date" in lines[j].lower():
+                        continue
+                    m2 = DATE_LINE_RE.search(lines[j]) or DATE_LINE_RE_3.search(lines[j]) or DATE_LINE_RE_2.search(lines[j])
+                    if m2:
+                        info["date_received"] = m2.group(0)
+                        info["_sources"]["date_received"] = lines[j].strip()
+                        break
             if info["date_received"]:
                 break
 
@@ -688,26 +769,14 @@ with st.sidebar:
 tab_single, tab_multi = st.tabs(["Single File", "Multiple Files"])
 
 with tab_single:
-    pdf_source = st.radio("PDF Source", ["Upload", "Local Path"], horizontal=True, key="single_source")
-    default_path = "/home/adminsb/disk2/report/TRN4475861_9068316_1257283_clinical_report_1_1745247720810608.pdf"
-    local_path = st.text_input("Local PDF path", value=default_path, key="single_path")
+    uploaded = st.file_uploader("Upload a PDF", type=["pdf"], key="single_upload")
 
     pdf_bytes = None
     pdf_name = None
 
-    if pdf_source == "Upload":
-        uploaded = st.file_uploader("Upload a PDF", type=["pdf"], key="single_upload")
-        if uploaded is not None:
-            pdf_bytes = uploaded.read()
-            pdf_name = uploaded.name
-    else:
-        if local_path:
-            try:
-                with open(local_path, "rb") as f:
-                    pdf_bytes = f.read()
-                    pdf_name = local_path.split("/")[-1]
-            except Exception as e:
-                st.error(f"Failed to read PDF: {e}")
+    if uploaded is not None:
+        pdf_bytes = uploaded.read()
+        pdf_name = uploaded.name
 
     if pdf_bytes:
         with st.spinner("Extracting text from PDF..."):
@@ -719,20 +788,14 @@ with tab_single:
             info = extract_patient_info(text)
 
             st.subheader("Patient / Report Summary")
-            summary_rows = [
-                {"Field": "Patient Name", "Info": info.get("patient_name") or ""},
-                {"Field": "Age", "Info": info.get("age") or ""},
-                {"Field": "Sex", "Info": info.get("sex") or ""},
-                {"Field": "Disease Name (Clinical Background)", "Info": info.get("disease_name") or ""},
-                {"Field": "Date Received", "Info": info.get("date_received") or ""},
-                {"Field": "Interpretation", "Info": info.get("interpretation") or ""},
-                {"Field": "Clinical Relevance", "Info": info.get("clinical_relevance") or ""},
-                {"Field": "Exon", "Info": info.get("exon") or ""},
-                {"Field": "Nucleotide Change (Genomic)", "Info": info.get("nucleotide_change") or ""},
-                {"Field": "ClinVar IDs (from PDF)", "Info": info.get("clinvar_ids") or ""},
-                {"Field": "PubMed IDs (from PDF)", "Info": info.get("pubmed_ids") or ""},
-            ]
-            st.table(summary_rows)
+            summary_row = {
+                "Patient Name": info.get("patient_name") or "",
+                "Age": info.get("age") or "",
+                "Sex": info.get("sex") or "",
+                "Clinical Background (Full)": info.get("clinical_background_full") or "",
+                "Date Received": info.get("date_received") or "",
+            }
+            st.dataframe([summary_row], use_container_width=True)
 
             if info.get("pubmed_ids"):
                 st.subheader("PubMed Links (from PDF)")
@@ -754,6 +817,10 @@ with tab_single:
                             "cDNA": v["cdna_change"],
                             "Genomic": v["genomic_change"],
                             "VAF": v["vaf"],
+                            "Variant Allele Depth/Total depth": v["variant_depth"],
+                            "Population MAF": v["population_maf"],
+                            "In-silico Predictions": v["insilico_predictions"],
+                            "Gene Function": v["gene_function"],
                             "Interpretation": v["interpretation"],
                             "Clinical Relevance": v["clinical_relevance"],
                             "Exon": v["exon"],
@@ -774,6 +841,10 @@ with tab_single:
                             "cDNA": h.cdna_change or "",
                             "Genomic": h.genomic_change or "",
                             "VAF": h.vaf or "",
+                            "Variant Allele Depth/Total depth": "",
+                            "Population MAF": "",
+                            "In-silico Predictions": "",
+                            "Gene Function": "",
                             "Interpretation": info.get("interpretation") or "",
                             "Clinical Relevance": info.get("clinical_relevance") or "",
                             "Exon": info.get("exon") or "",
@@ -786,6 +857,34 @@ with tab_single:
                         for h in hits
                     ]
                 st.dataframe(rows, use_container_width=True)
+                pmid_items = []
+                for r in rows:
+                    pmids = str(r.get("PubMed IDs (from PDF)", "")).strip()
+                    if pmids:
+                        pmid_items.append(
+                            {
+                                "Patient Name": r.get("Patient Name", ""),
+                                "Gene": r.get("Gene", ""),
+                                "Protein change": r.get("Protein change", ""),
+                                "PMIDs": pmids,
+                            }
+                        )
+                if pmid_items:
+                    with st.expander("PMID Links"):
+                        for item in pmid_items:
+                            pmid_links = []
+                            for p in item["PMIDs"].split(","):
+                                p = p.strip()
+                                if not p:
+                                    continue
+                                pmid_links.append(
+                                    f'<a href="https://pubmed.ncbi.nlm.nih.gov/{p}/" target="_blank" rel="noreferrer">{p}</a>'
+                                )
+                            st.markdown(
+                                f'**{item["Patient Name"]} | {item["Gene"]} {item["Protein change"]}**: '
+                                + ", ".join(pmid_links),
+                                unsafe_allow_html=True,
+                            )
                 genes = sorted({r.get("Gene") for r in rows if r.get("Gene")})
                 if genes:
                     st.subheader("ProteinPaint Lollipop")
@@ -875,14 +974,8 @@ with tab_multi:
                     "Patient Name": patient_name,
                     "Age": info.get("age") or "",
                     "Sex": info.get("sex") or "",
-                    "Disease Name (Clinical Background)": info.get("disease_name") or "",
+                    "Clinical Background (Full)": info.get("clinical_background_full") or "",
                     "Date Received": info.get("date_received") or "",
-                    "Interpretation": info.get("interpretation") or "",
-                    "Clinical Relevance": info.get("clinical_relevance") or "",
-                    "Exon": info.get("exon") or "",
-                    "Nucleotide Change (Genomic)": info.get("nucleotide_change") or "",
-                    "ClinVar IDs (from PDF)": info.get("clinvar_ids") or "",
-                    "PubMed IDs (from PDF)": info.get("pubmed_ids") or "",
                 }
             )
 
@@ -898,6 +991,10 @@ with tab_multi:
                             "cDNA": v["cdna_change"],
                             "Genomic": v["genomic_change"],
                             "VAF": v["vaf"],
+                            "Variant Allele Depth/Total depth": v["variant_depth"],
+                            "Population MAF": v["population_maf"],
+                            "In-silico Predictions": v["insilico_predictions"],
+                            "Gene Function": v["gene_function"],
                             "Interpretation": v["interpretation"],
                             "Clinical Relevance": v["clinical_relevance"],
                             "Exon": v["exon"],
@@ -918,6 +1015,10 @@ with tab_multi:
                             "cDNA": h.cdna_change or "",
                             "Genomic": h.genomic_change or "",
                             "VAF": h.vaf or "",
+                            "Variant Allele Depth/Total depth": "",
+                            "Population MAF": "",
+                            "In-silico Predictions": "",
+                            "Gene Function": "",
                             "Interpretation": info.get("interpretation") or "",
                             "Clinical Relevance": info.get("clinical_relevance") or "",
                             "Exon": info.get("exon") or "",
@@ -931,28 +1032,10 @@ with tab_multi:
 
         st.subheader("Patient / Report Summary")
         if all_summary_rows:
-            fields = [
-                "Age",
-                "Sex",
-                "Disease Name (Clinical Background)",
-                "Date Received",
-                "Interpretation",
-                "Clinical Relevance",
-                "Exon",
-                "Nucleotide Change (Genomic)",
-                "ClinVar IDs (from PDF)",
-                "PubMed IDs (from PDF)",
-            ]
-            wide_rows = []
-            for field in fields:
-                row = {"Field": field}
-                for s in all_summary_rows:
-                    row[s["Patient Name"]] = s.get(field, "")
-                wide_rows.append(row)
-            st.dataframe(wide_rows, use_container_width=True)
+            st.dataframe(all_summary_rows, use_container_width=True)
             st.download_button(
                 label="Download Summary CSV",
-                data=_rows_to_csv(wide_rows),
+                data=_rows_to_csv(all_summary_rows),
                 file_name="patient_summary.csv",
                 mime="text/csv",
             )
@@ -962,6 +1045,34 @@ with tab_multi:
         st.subheader("Extracted Variants")
         if all_variant_rows:
             st.dataframe(all_variant_rows, use_container_width=True)
+            pmid_items = []
+            for r in all_variant_rows:
+                pmids = str(r.get("PubMed IDs (from PDF)", "")).strip()
+                if pmids:
+                    pmid_items.append(
+                        {
+                            "Patient Name": r.get("Patient Name", ""),
+                            "Gene": r.get("Gene", ""),
+                            "Protein change": r.get("Protein change", ""),
+                            "PMIDs": pmids,
+                        }
+                    )
+            if pmid_items:
+                with st.expander("PMID Links"):
+                    for item in pmid_items:
+                        pmid_links = []
+                        for p in item["PMIDs"].split(","):
+                            p = p.strip()
+                            if not p:
+                                continue
+                            pmid_links.append(
+                                f'<a href="https://pubmed.ncbi.nlm.nih.gov/{p}/" target="_blank" rel="noreferrer">{p}</a>'
+                            )
+                        st.markdown(
+                            f'**{item["Patient Name"]} | {item["Gene"]} {item["Protein change"]}**: '
+                            + ", ".join(pmid_links),
+                            unsafe_allow_html=True,
+                        )
             st.download_button(
                 label="Download Variants CSV",
                 data=_rows_to_csv(all_variant_rows),
@@ -1003,4 +1114,4 @@ with tab_multi:
         st.info("Upload one or more PDFs to begin.")
 
 st.markdown("---")
-st.caption("This tool extracts variants heuristically and is not a clinical diagnostic device.")
+st.caption("This tool is made for report interpretation.")
