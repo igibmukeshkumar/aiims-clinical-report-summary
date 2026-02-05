@@ -3,3 +3,5 @@ requests
 pdfplumber
 pytesseract
 pillow
+vl-convert-python
+cairosvg
