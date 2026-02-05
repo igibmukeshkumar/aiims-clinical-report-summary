@@ -1,4 +1,5 @@
 import io
+import html
 import json
 import re
 import subprocess
@@ -8,6 +9,14 @@ from typing import List, Optional, Tuple, Dict
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
+try:
+    import vl_convert as vlc  # optional export for PNG/SVG/PDF
+except Exception:  # pragma: no cover
+    vlc = None
+try:
+    import cairosvg  # optional PDF export
+except Exception:  # pragma: no cover
+    cairosvg = None
  
 
 try:
@@ -21,6 +30,7 @@ except Exception:  # pragma: no cover
 
 
 APP_TITLE = "Summary of MedGenome Report"
+CBIO_BASE = "https://www.cbioportal.org"
 
 def _rows_to_csv(rows: List[Dict[str, str]]) -> str:
     if not rows:
@@ -30,6 +40,17 @@ def _rows_to_csv(rows: List[Dict[str, str]]) -> str:
     output.write(",".join(fieldnames) + "\\n")
     for r in rows:
         output.write(",".join(str(r.get(k, "")).replace(",", " ") for k in fieldnames) + "\\n")
+    return output.getvalue()
+
+
+def _rows_to_tsv(rows: List[Dict[str, str]]) -> str:
+    if not rows:
+        return ""
+    fieldnames = list(rows[0].keys())
+    output = io.StringIO()
+    output.write("\t".join(fieldnames) + "\n")
+    for r in rows:
+        output.write("\t".join(str(r.get(k, "")) for k in fieldnames) + "\n")
     return output.getvalue()
 
 
@@ -87,16 +108,31 @@ def _fill_missing(row: Dict[str, object], fill_value: str = ".") -> Dict[str, ob
 
 
 def _render_proteinpaint(gene: str, genome: str, dataset: str, host: str) -> None:
-    if not gene:
-        return
-    host = host.rstrip("/")
-    link = f"{host}/?gene={gene}&genome={genome}"
-    if dataset:
-        link += f"&dataset={dataset}"
+    link = "https://proteinpaint.stjude.org/?gene=FBXW7&genome=hg38&dataset=pediatric"
+    st.markdown("**ProteinPaint**")
     st.markdown(
-        f'ProteinPaint link: <a href="{link}" target="_blank" rel="noreferrer">{link}</a>',
+        f"""
+        <a href="{link}" target="_blank" rel="noreferrer"
+           style="display:inline-block;padding:8px 14px;background:#2563eb;color:#fff;
+                  border-radius:6px;text-decoration:none;font-weight:600;">
+          Open ProteinPaint (FBXW7)
+        </a>
+        """,
         unsafe_allow_html=True,
     )
+
+
+def _build_cbioportal_input(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    data = []
+    for r in rows:
+        data.append(
+            {
+                "Hugo_Symbol": r.get("Gene", ""),
+                "Sample_ID": r.get("Patient Name", ""),
+                "Protein_Change": r.get("Protein change", ""),
+            }
+        )
+    return data
 
 
  
@@ -1251,9 +1287,47 @@ with tab_multi:
                 gene_sel = st.selectbox("Select gene", genes, key="pp_gene_multi")
                 _render_proteinpaint(gene_sel, pp_genome, pp_dataset, pp_host)
 
+                st.subheader("cBioPortal")
+                cbio_link = f"{CBIO_BASE}/mutation_mapper?gene={gene_sel}"
+                st.markdown(
+                    "**Steps**\n"
+                    "1. Copy the Input Data below\n"
+                    "2. Click the button to open cBioPortal\n"
+                    "3. Paste in the input and visualize"
+                )
+                st.markdown(
+                    f"""
+                    <a href="{cbio_link}" target="_blank" rel="noreferrer"
+                       style="display:inline-block;padding:8px 14px;background:#2563eb;color:#fff;
+                              border-radius:6px;text-decoration:none;font-weight:600;">
+                      Open cBioPortal Mutation Mapper
+                    </a>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                cbio_rows = _build_cbioportal_input(all_variant_rows)
+                if cbio_rows:
+                    tsv = _rows_to_tsv(cbio_rows)
+                    st.markdown("**Input Data (copy this):**")
+                    components.html(
+                        f"""
+                        <div style="display:flex; justify-content:flex-start; margin-bottom:6px;">
+                          <button onclick="navigator.clipboard.writeText(document.getElementById('cbio_text_multi').value)">
+                            Copy
+                          </button>
+                        </div>
+                        <textarea id="cbio_text_multi" style="width:100%;height:200px;">{html.escape(tsv)}</textarea>
+                        """,
+                        height=260,
+                    )
+                else:
+                    st.info("No variants available for cBioPortal input.")
+
             st.subheader("VAF Heatmap")
             heatmap_data = _build_heatmap_data(all_variant_rows)
             if heatmap_data:
+                heatmap_height = st.slider("Heatmap height", 200, 1000, 400, 50, key="heatmap_height")
+                heatmap_width = st.slider("Heatmap width", 300, 2000, 900, 50, key="heatmap_width")
                 st.caption("Interactive heatmap. Hover to see values. Scroll to pan.")
                 spec = {
                     "mark": "rect",
@@ -1268,10 +1342,68 @@ with tab_multi:
                             {"field": "VAF", "type": "quantitative"},
                         ],
                     },
-                    "width": "container",
-                    "height": 400,
+                    "width": heatmap_width,
+                    "height": heatmap_height,
                 }
                 st.vega_lite_chart(heatmap_data, spec, use_container_width=True)
+                vega_spec = dict(spec)
+                vega_spec["data"] = {"values": heatmap_data}
+                html_payload = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+</head>
+<body>
+  <div id="vis"></div>
+  <script>
+    const spec = {json.dumps(vega_spec)};
+    vegaEmbed('#vis', spec, {{actions: false}});
+  </script>
+</body>
+</html>"""
+                st.download_button(
+                    label="Download VAF Heatmap (HTML)",
+                    data=html_payload,
+                    file_name="vaf_heatmap.html",
+                    mime="text/html",
+                )
+                if vlc is not None:
+                    try:
+                        png_bytes = vlc.vegalite_to_png(vega_spec)
+                        st.download_button(
+                            label="Download VAF Heatmap (PNG)",
+                            data=png_bytes,
+                            file_name="vaf_heatmap.png",
+                            mime="image/png",
+                        )
+                    except Exception:
+                        st.info("PNG export unavailable.")
+                    try:
+                        svg_text = vlc.vegalite_to_svg(vega_spec)
+                        st.download_button(
+                            label="Download VAF Heatmap (SVG)",
+                            data=svg_text,
+                            file_name="vaf_heatmap.svg",
+                            mime="image/svg+xml",
+                        )
+                    except Exception:
+                        st.info("SVG export unavailable.")
+                    if cairosvg is not None:
+                        try:
+                            pdf_bytes = cairosvg.svg2pdf(bytestring=svg_text.encode("utf-8"))
+                            st.download_button(
+                                label="Download VAF Heatmap (PDF)",
+                                data=pdf_bytes,
+                                file_name="vaf_heatmap.pdf",
+                                mime="application/pdf",
+                            )
+                        except Exception:
+                            st.info("PDF export unavailable.")
+                else:
+                    st.info("PNG/PDF export requires `vl-convert-python` (and `cairosvg` for PDF).")
             else:
                 st.info("Heatmap unavailable (no VAF values).")
         else:
