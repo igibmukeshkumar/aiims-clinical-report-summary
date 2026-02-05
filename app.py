@@ -65,6 +65,27 @@ def _build_heatmap_data(rows: List[Dict[str, str]]) -> List[Dict[str, object]]:
     return data
 
 
+def _truncate(text: str, n: int = 160) -> str:
+    if not text:
+        return ""
+    s = str(text)
+    if len(s) <= n:
+        return s
+    return s[:n].rstrip() + "..."
+
+
+def _fill_missing(row: Dict[str, object], fill_value: str = ".") -> Dict[str, object]:
+    out = {}
+    for k, v in row.items():
+        if v is None:
+            out[k] = fill_value
+        elif isinstance(v, str) and v.strip() == "":
+            out[k] = fill_value
+        else:
+            out[k] = v
+    return out
+
+
 def _render_proteinpaint(gene: str, genome: str, dataset: str, host: str) -> None:
     if not gene:
         return
@@ -92,6 +113,7 @@ class VariantHit:
 
 
 GENE_LINE_RE = re.compile(r"^\s*([A-Z0-9]{2,})\b.*?p\.([A-Za-z]{3}\d+[A-Za-z0-9]+)")
+CNV_GENE_RE = re.compile(r"^\s*([A-Z0-9]{2,})\s*\(CNV\)", re.IGNORECASE)
 PROTEIN_RE = re.compile(r"\bp\.([A-Za-z]{3}\d+[A-Za-z0-9]+)\b", re.IGNORECASE)
 CDNA_RE = re.compile(r"(?:cDNA\s*change\s*:?\s*)?c\.\s*([0-9_]+[A-Za-z0-9>_]+)", re.IGNORECASE)
 CDNA_INLINE_RE = re.compile(r"c\.\s*([0-9_]+[A-Za-z0-9>_]+)", re.IGNORECASE)
@@ -114,7 +136,9 @@ VAF_RE = re.compile(r"(?:Variant Allele Frequency|VAF)\s*[-:]*\s*([0-9.]+%?)", r
 VARIANT_DEPTH_RE = re.compile(r"Variant Allele Depth/Total depth:\s*([0-9]+/[0-9]+x?)", re.IGNORECASE)
 POP_MAF_RE = re.compile(r"Population MAF:\s*([^;\\n]+(?:;[^\\n]+)?)", re.IGNORECASE)
 INSILICO_RE = re.compile(r"In-silico Predictions:\s*([^\\n]+)", re.IGNORECASE)
-GENE_FUNCTION_RE = re.compile(r"Gene Function:\s*([^\\n]+)", re.IGNORECASE)
+GENE_FUNCTION_RE = re.compile(r"Gene Function:\s*([A-Za-z0-9/ \\-]+)", re.IGNORECASE)
+GENE_SUMMARY_RE = re.compile(r"Gene Summary:\s*(.*)", re.IGNORECASE)
+CNV_TYPE_RE = re.compile(r"CNV type:\s*([^\\n]+)", re.IGNORECASE)
 CLINVAR_RE = re.compile(r"\b(?:RCV\d+|SCV\d+|VCV\d+|ClinVar\s*ID\s*:\s*\d+)\b", re.IGNORECASE)
 PMID_RE = re.compile(r"PMID\s*:\s*(\d+)", re.IGNORECASE)
 CLIN_RELEVANCE_RE = re.compile(r"Clinical relevance\s*:?\s*(.*)", re.IGNORECASE)
@@ -248,7 +272,8 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
             break
     if actionable_start is not None:
         for j in range(actionable_start, len(lines)):
-            if "ADDITIONAL BIOMARKERS DETECTED" in lines[j].upper() or "GLOSSARY" in lines[j].upper():
+            up = lines[j].upper()
+            if "ADDITIONAL BIOMARKERS DETECTED" in up or "GLOSSARY" in up or "DISCLAIMER" in up:
                 actionable_end = j
                 break
     if actionable_start is not None:
@@ -285,6 +310,12 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
         if _skip_noise(ln):
             continue
         m = GENE_LINE_RE.search(ln)
+        m_cnv = CNV_GENE_RE.search(ln)
+        if m_cnv and m_cnv.group(1).upper() not in bad_gene_tokens:
+            if current:
+                blocks.append(current)
+            current = [ln]
+            continue
         if m and m.group(1).upper() not in bad_gene_tokens:
             if current:
                 blocks.append(current)
@@ -305,10 +336,17 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
         joined = re.sub(r"(Nucleotide change:)(chr)", r"\1 \2", joined, flags=re.IGNORECASE)
         joined = re.sub(r"(cDNA change:)(c\\.)", r"\1 \2", joined, flags=re.IGNORECASE)
         m = GENE_LINE_RE.search(block[0])
-        if not m:
+        m_cnv = CNV_GENE_RE.search(block[0])
+        if not m and not m_cnv:
             continue
-        gene = m.group(1)
-        protein_change = f"p.{m.group(2)}"
+        if m_cnv:
+            gene = m_cnv.group(1)
+            protein_change = "CNV"
+            variant_type = "CNV"
+        else:
+            gene = m.group(1)
+            protein_change = f"p.{m.group(2)}"
+            variant_type = "SNV/Indel"
         cdna_match = CDNA_RE.search(joined)
         if cdna_match is None:
             cdna_match = CDNA_INLINE_RE.search(joined)
@@ -323,18 +361,31 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
         population_maf = None
         insilico = None
         gene_function = None
+        gene_summary = None
+        cnv_type = None
+        cnv_raw_full = None
         interpretation = None
         clinical_relevance = None
         clinvar_ids = set()
         pubmed_ids = set()
 
+        in_gene_summary = False
+        gene_summary_parts: List[str] = []
         in_clin_relevance = False
         clin_rel_parts: List[str] = []
         in_pubmed_refs = False
         pubmed_numbers: List[str] = []
 
-        for ln in block:
+        for idx, ln in enumerate(block):
             if _skip_noise(ln):
+                continue
+            # handle split headings
+            next_ln = block[idx + 1] if idx + 1 < len(block) else ""
+            if ln.strip().upper() == "GENE SUMMARY" and gene_summary is None:
+                in_gene_summary = True
+                continue
+            if ln.strip().upper() == "CLINICAL AND" and "THERAPEUTIC RELEVANCE" in next_ln.upper():
+                in_clin_relevance = True
                 continue
 
             if exon is None:
@@ -369,6 +420,45 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
                 gf = GENE_FUNCTION_RE.search(ln)
                 if gf:
                     gene_function = gf.group(1).strip()
+            if cnv_type is None:
+                ct = CNV_TYPE_RE.search(ln)
+                if ct:
+                    cnv_raw = ct.group(1).strip()
+                    next_ln = block[idx + 1].strip() if idx + 1 < len(block) else ""
+                    # handle split: "Copy" + "Number Gain/Loss"
+                    if cnv_raw.lower() == "copy" and next_ln.lower().startswith("number"):
+                        cnv_raw = f"{cnv_raw} {next_ln}"
+                    elif cnv_raw.lower() == "copy number" and (next_ln.lower().startswith("gain") or next_ln.lower().startswith("loss")):
+                        cnv_raw = f"{cnv_raw} {next_ln}"
+                    cnv_raw_full = cnv_raw
+                    if any(k in cnv_raw.lower() for k in ["gain", "dup", "ampl"]):
+                        cnv_type = "Gain"
+                    elif any(k in cnv_raw.lower() for k in ["loss", "del"]):
+                        cnv_type = "Loss"
+                    else:
+                        cnv_type = cnv_raw
+                else:
+                    low = ln.lower()
+                    if any(k in low for k in ["duplication", "amplification", "copy number gain"]):
+                        cnv_type = "Gain"
+                    elif any(k in low for k in ["deletion", "loss", "copy number loss"]):
+                        cnv_type = "Loss"
+            if gene_summary is None:
+                gs = GENE_SUMMARY_RE.search(ln)
+                if gs:
+                    val = gs.group(1).strip()
+                    if val:
+                        gene_summary_parts.append(val)
+                        in_gene_summary = True
+                        continue
+                    else:
+                        in_gene_summary = True
+                        continue
+            if in_gene_summary:
+                if GENE_LINE_RE.search(ln) or CLIN_THER_RE.search(ln) or CLIN_RELEVANCE_RE.search(ln):
+                    in_gene_summary = False
+                else:
+                    gene_summary_parts.append(ln)
             if interpretation is None:
                 im = INTERPRETATION_RE.search(ln)
                 if im:
@@ -380,13 +470,14 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
                 if cm:
                     val = cm.group(1).strip()
                     if val:
-                        clinical_relevance = val
-                        in_clin_relevance = False
+                        clin_rel_parts.append(val)
+                        in_clin_relevance = True
+                        continue
                     else:
                         in_clin_relevance = True
                         continue
             if in_clin_relevance:
-                if PUBMED_REFS_RE.search(ln) or GENE_LINE_RE.search(ln) or "Gene Summary" in ln:
+                if GENE_LINE_RE.search(ln):
                     in_clin_relevance = False
                 else:
                     clin_rel_parts.append(ln)
@@ -406,8 +497,10 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
                     nums = re.findall(r"\b\d{7,8}\b", ln)
                     pubmed_numbers.extend(nums)
 
-        if clinical_relevance is None and clin_rel_parts:
-            clinical_relevance = " ".join(clin_rel_parts).strip()
+        if gene_summary_parts:
+            gene_summary = "\n".join(gene_summary_parts).strip()
+        if clin_rel_parts:
+            clinical_relevance = "\n".join(clin_rel_parts).strip()
 
         if not nucleotide_change:
             gmatch = GENOMIC_RE.search(joined)
@@ -416,6 +509,14 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
 
         if not genomic_match and nucleotide_change and nucleotide_change.lower().startswith("chr"):
             genomic_match = re.match(r".+", nucleotide_change)
+
+        if variant_type == "CNV":
+            if cnv_type is None or (isinstance(cnv_type, str) and cnv_type.lower() in {"copy", "copy number", "."}):
+                joined_low = joined.lower()
+                if any(k in joined_low for k in ["gain", "dup", "amplification", "copy number gain"]):
+                    cnv_type = "Gain"
+                elif any(k in joined_low for k in ["loss", "deletion", "copy number loss"]):
+                    cnv_type = "Loss"
 
         if pubmed_numbers:
             for n in pubmed_numbers:
@@ -437,6 +538,8 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
                 "population_maf": population_maf or "",
                 "insilico_predictions": insilico or "",
                 "gene_function": gene_function or "",
+                "gene_summary": gene_summary or "",
+                "variant_type": (cnv_raw_full or cnv_type or ".") if variant_type == "CNV" else variant_type,
                 "clinvar_ids": ", ".join(sorted(clinvar_ids)) if clinvar_ids else "",
                 "pubmed_ids": ", ".join(sorted(pubmed_ids)) if pubmed_ids else "",
                 "evidence": block[0],
@@ -465,8 +568,11 @@ def _extract_variant_blocks(text: str) -> List[Dict[str, str]]:
             "population_maf",
             "insilico_predictions",
             "gene_function",
+            "gene_summary",
+            "variant_type",
         ]:
-            if not cur.get(field) and v.get(field):
+            cur_val = cur.get(field)
+            if (cur_val is None or cur_val == "" or cur_val == ".") and v.get(field):
                 cur[field] = v[field]
         # merge ids
         for field in ["clinvar_ids", "pubmed_ids"]:
@@ -821,6 +927,8 @@ with tab_single:
                             "Population MAF": v["population_maf"],
                             "In-silico Predictions": v["insilico_predictions"],
                             "Gene Function": v["gene_function"],
+                            "Gene Summary": v["gene_summary"],
+                            "Variant Type": v["variant_type"],
                             "Interpretation": v["interpretation"],
                             "Clinical Relevance": v["clinical_relevance"],
                             "Exon": v["exon"],
@@ -828,7 +936,7 @@ with tab_single:
                             "Transcript ID": v["transcript_id"],
                             "ClinVar IDs (from PDF)": v["clinvar_ids"],
                             "PubMed IDs (from PDF)": v["pubmed_ids"],
-                            "Variant Type": v["evidence"],
+                            "Variant Type": v["variant_type"],
                         }
                         for v in variant_blocks
                     ]
@@ -845,6 +953,8 @@ with tab_single:
                             "Population MAF": "",
                             "In-silico Predictions": "",
                             "Gene Function": "",
+                            "Gene Summary": "",
+                            "Variant Type": "SNV/Indel",
                             "Interpretation": info.get("interpretation") or "",
                             "Clinical Relevance": info.get("clinical_relevance") or "",
                             "Exon": info.get("exon") or "",
@@ -852,11 +962,37 @@ with tab_single:
                             "Transcript ID": "",
                             "ClinVar IDs (from PDF)": info.get("clinvar_ids") or "",
                             "PubMed IDs (from PDF)": info.get("pubmed_ids") or "",
-                            "Variant Type": h.raw_line,
+                            "Variant Type": "SNV/Indel",
                         }
                         for h in hits
                     ]
-                st.dataframe(rows, use_container_width=True)
+                rows = [_fill_missing(r) for r in rows]
+                display_rows = []
+                for r in rows:
+                    r2 = dict(r)
+                    r2["Gene Summary"] = _truncate(r.get("Gene Summary", ""))
+                    r2["Clinical Relevance"] = _truncate(r.get("Clinical Relevance", ""))
+                    display_rows.append(r2)
+                st.dataframe(display_rows, use_container_width=True)
+                with st.expander("Read more (Gene Summary / Clinical Relevance)"):
+                    patient_ids = sorted({r.get("Patient Name", "") for r in rows if r.get("Patient Name")})
+                    selected = st.selectbox("Select Patient", ["All"] + patient_ids, key="readmore_select_single")
+                    for r in rows:
+                        if selected != "All" and r.get("Patient Name") != selected:
+                            continue
+                        gs = r.get("Gene Summary", "")
+                        cr = r.get("Clinical Relevance", "")
+                        if not gs and not cr:
+                            continue
+                        st.markdown(
+                            f"**{r.get('Patient Name','')} | {r.get('Gene','')} {r.get('Protein change','')}**"
+                        )
+                        if gs:
+                            st.markdown("Gene Summary:")
+                            st.write(gs)
+                        if cr:
+                            st.markdown("Clinical and Therapeutic Relevance:")
+                            st.write(cr)
                 pmid_items = []
                 for r in rows:
                     pmids = str(r.get("PubMed IDs (from PDF)", "")).strip()
@@ -995,6 +1131,8 @@ with tab_multi:
                             "Population MAF": v["population_maf"],
                             "In-silico Predictions": v["insilico_predictions"],
                             "Gene Function": v["gene_function"],
+                            "Gene Summary": v["gene_summary"],
+                            "Variant Type": v["variant_type"],
                             "Interpretation": v["interpretation"],
                             "Clinical Relevance": v["clinical_relevance"],
                             "Exon": v["exon"],
@@ -1019,6 +1157,8 @@ with tab_multi:
                             "Population MAF": "",
                             "In-silico Predictions": "",
                             "Gene Function": "",
+                            "Gene Summary": "",
+                            "Variant Type": "SNV/Indel",
                             "Interpretation": info.get("interpretation") or "",
                             "Clinical Relevance": info.get("clinical_relevance") or "",
                             "Exon": info.get("exon") or "",
@@ -1044,7 +1184,33 @@ with tab_multi:
 
         st.subheader("Extracted Variants")
         if all_variant_rows:
-            st.dataframe(all_variant_rows, use_container_width=True)
+            all_variant_rows = [_fill_missing(r) for r in all_variant_rows]
+            display_rows = []
+            for r in all_variant_rows:
+                r2 = dict(r)
+                r2["Gene Summary"] = _truncate(r.get("Gene Summary", ""))
+                r2["Clinical Relevance"] = _truncate(r.get("Clinical Relevance", ""))
+                display_rows.append(r2)
+            st.dataframe(display_rows, use_container_width=True)
+            with st.expander("Read more (Gene Summary / Clinical Relevance)"):
+                patient_ids = sorted({r.get("Patient Name", "") for r in all_variant_rows if r.get("Patient Name")})
+                selected = st.selectbox("Select Patient", ["All"] + patient_ids, key="readmore_select_multi")
+                for r in all_variant_rows:
+                    if selected != "All" and r.get("Patient Name") != selected:
+                        continue
+                    gs = r.get("Gene Summary", "")
+                    cr = r.get("Clinical Relevance", "")
+                    if not gs and not cr:
+                        continue
+                    st.markdown(
+                        f"**{r.get('Patient Name','')} | {r.get('Gene','')} {r.get('Protein change','')}**"
+                    )
+                    if gs:
+                        st.markdown("Gene Summary:")
+                        st.write(gs)
+                    if cr:
+                        st.markdown("Clinical and Therapeutic Relevance:")
+                        st.write(cr)
             pmid_items = []
             for r in all_variant_rows:
                 pmids = str(r.get("PubMed IDs (from PDF)", "")).strip()
