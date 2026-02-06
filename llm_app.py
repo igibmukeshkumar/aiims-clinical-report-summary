@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict
 
 import requests
-from groq import Groq
+try:
+    from groq import Groq
+except Exception:  # pragma: no cover
+    Groq = None
 import streamlit as st
 import streamlit.components.v1 as components
 try:
@@ -932,6 +935,8 @@ def groq_chat(
     messages: List[Dict[str, str]],
     temperature: float = 0.1,
 ) -> str:
+    if Groq is None:
+        raise RuntimeError("groq package is not installed")
     client = Groq(api_key=api_key)
     resp = client.chat.completions.create(
         model=model,
@@ -1215,7 +1220,9 @@ with st.sidebar:
         groq_api_key = st.text_input("GROQ_API_KEY", value=os.environ.get("GROQ_API_KEY", ""), type="password")
         model = st.text_input("Groq model", value=DEFAULT_GROQ_MODEL)
         base_url = DEFAULT_OLLAMA_URL
-        if groq_api_key:
+        if Groq is None:
+            st.error("Groq SDK not installed. Add `groq` to requirements.txt.")
+        elif groq_api_key:
             st.success("Groq key set")
         else:
             st.error("Groq key missing")
