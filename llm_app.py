@@ -36,7 +36,7 @@ except Exception:  # pragma: no cover
 APP_TITLE = "ClinPDF-Report Analyzer"
 CBIO_BASE = "https://www.cbioportal.org"
 DEFAULT_OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-DEFAULT_GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
+DEFAULT_GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 DEFAULT_MODEL = "llama3.1:70b"
 DEFAULT_MAX_CHARS = 16000
 
