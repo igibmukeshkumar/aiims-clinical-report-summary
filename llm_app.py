@@ -1231,6 +1231,7 @@ with st.sidebar:
             st.success("Groq key set")
         else:
             st.error("Groq key missing")
+            st.caption("Get a free key at https://console.groq.com/ (create an account → API keys).")
     else:
         base_url = st.text_input("Ollama base URL", value=DEFAULT_OLLAMA_URL)
         st.caption("If Ollama is running elsewhere, set OLLAMA_HOST or change this URL.")
