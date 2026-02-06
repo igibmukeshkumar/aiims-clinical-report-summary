@@ -1248,7 +1248,10 @@ with st.sidebar:
         else:
             model = st.text_input("Model", value=DEFAULT_MODEL)
         groq_api_key = None
-    use_llm = st.checkbox("Use LLM extraction", value=True)
+    if use_groq and not groq_api_key:
+        st.info("Add your own Groq API key above to enable cloud LLM extraction.")
+    use_llm_default = bool(groq_api_key) if use_groq else True
+    use_llm = st.checkbox("Use LLM extraction", value=use_llm_default)
     max_chars = st.slider("LLM input max chars", 3000, 30000, DEFAULT_MAX_CHARS, 1000)
     llm_retries = st.slider("LLM JSON retries", 0, 2, 1, 1)
     temperature = st.slider("LLM temperature", 0.0, 0.5, 0.0, 0.1)
@@ -1310,6 +1313,8 @@ def _extract_with_fallback(text: str) -> Tuple[Dict[str, str], List[Dict[str, st
     if not use_llm:
         return regex_info, regex_variants
 
+    if use_groq and not groq_api_key:
+        return regex_info, regex_variants
     try:
         llm_data = llm_extract(
             text,
