@@ -5,4 +5,3 @@ pytesseract
 pillow
 vl-convert-python
 cairosvg
-groq
