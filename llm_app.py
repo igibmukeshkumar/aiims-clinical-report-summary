@@ -37,6 +37,7 @@ APP_TITLE = "ClinPDF-Report Analyzer"
 CBIO_BASE = "https://www.cbioportal.org"
 DEFAULT_OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 DEFAULT_GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+DEFAULT_APP_URL = os.environ.get("APP_URL", "")
 DEFAULT_MODEL = "llama3.1:70b"
 DEFAULT_MAX_CHARS = 16000
 
@@ -1230,6 +1231,7 @@ def llm_extract(
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
+st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
 st.title(APP_TITLE)
 st.markdown(
     "<div style='line-height:1.2;'>"
@@ -1240,13 +1242,212 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-st.info(
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Space+Grotesk:wght@400;500;600&display=swap');
+
+    :root {
+      --bg-1: #f7f3ea;
+      --bg-2: #eef6f4;
+      --ink: #0f172a;
+      --muted: #475569;
+      --accent: #0f766e;
+      --accent-2: #0ea5a4;
+      --card: rgba(255, 255, 255, 0.7);
+      --card-border: rgba(15, 23, 42, 0.08);
+    }
+
+    header[data-testid="stHeader"] {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--card-border);
+    }
+    header[data-testid="stHeader"] * {
+      color: var(--ink);
+    }
+
+    .stApp {
+      background: radial-gradient(1200px 600px at 10% -10%, var(--bg-2), transparent),
+                  radial-gradient(1200px 600px at 90% -20%, #f3efe2, transparent),
+                  linear-gradient(180deg, var(--bg-1) 0%, #ffffff 60%);
+      color: var(--ink);
+    }
+
+    .block-container {
+      padding-top: 1.2rem;
+      animation: fadeIn 0.6s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    h1, h2, h3, h4 {
+      font-family: 'Playfair Display', serif;
+      letter-spacing: 0.2px;
+    }
+
+    .stMarkdown, .stCaption, .stText, label, p, span, div {
+      font-family: 'Space Grotesk', sans-serif;
+    }
+
+    div[data-testid="stSidebar"] {
+      background: rgba(255, 255, 255, 0.9);
+      border-right: 1px solid var(--card-border);
+      backdrop-filter: blur(10px);
+    }
+
+    button[data-baseweb="tab"] {
+      font-size: 54px;
+      padding: 24px 28px;
+      width: 33.33%;
+      justify-content: center;
+      border-radius: 999px;
+      background: linear-gradient(135deg, rgba(14, 165, 164, 0.15), rgba(15, 118, 110, 0.12));
+      color: var(--ink);
+      border: 1px solid var(--card-border);
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+      background: linear-gradient(135deg, rgba(14, 165, 164, 0.35), rgba(15, 118, 110, 0.25));
+      border-color: rgba(15, 118, 110, 0.3);
+      box-shadow: 0 8px 24px rgba(15, 118, 110, 0.15);
+    }
+
+    .stAlert {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+      color: var(--ink);
+    }
+    .stAlert * {
+      color: var(--ink) !important;
+    }
+
+    .stDataFrame, .stTable {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 6px;
+    }
+
+    .stButton > button {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: white;
+      border: 0;
+      border-radius: 10px;
+      padding: 0.5rem 1rem;
+    }
+    .share-bar {
+      position: fixed;
+      top: 12px;
+      right: 18px;
+      display: flex;
+      gap: 8px;
+      z-index: 9999;
+    }
+    .share-bar a {
+      text-decoration: none;
+      font-weight: 600;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid var(--card-border);
+      color: var(--ink);
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+    }
+    .share-bar a:hover {
+      background: #f1f5f9;
+    }
+
+    div[data-testid="stFileUploader"] label,
+    div[data-testid="stFileUploader"] span,
+    div[data-testid="stFileUploader"] small,
+    div[data-testid="stFileUploader"] p {
+      color: var(--ink) !important;
+    }
+    div[data-testid="stFileUploader"] section {
+      border-color: rgba(15, 23, 42, 0.2) !important;
+      background: rgba(255, 255, 255, 0.85);
+    }
+    div[data-testid="stFileUploader"] button {
+      color: #0f172a !important;
+      border-color: rgba(15, 23, 42, 0.3) !important;
+      background: #ffffff !important;
+    }
+    div[data-testid="stFileUploader"] [data-testid="stFileUploaderFileName"],
+    div[data-testid="stFileUploader"] [data-testid="stFileUploaderFileSize"],
+    div[data-testid="stFileUploader"] [data-testid="stFileUploaderStatus"],
+    div[data-testid="stFileUploader"] [data-testid="stFileUploaderFileName"] *,
+    div[data-testid="stFileUploader"] [data-testid="stFileUploaderFileSize"] * {
+      color: #0f172a !important;
+    }
+    div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] {
+      color: #0f172a !important;
+    }
+    .stChatMessage, .stChatMessage p, .stChatMessage span, .stChatMessage div {
+      color: var(--ink) !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.markdown(
+    "<div style='padding:12px 14px; border-radius:12px; "
+    "background:#ffe7d6; border:1px solid #f4bda0; color:#4b2316; font-weight:600;'>"
     "Upload clinical report PDFs to extract gene/variant details using a local LLM, "
     "then optionally search PubMed and ClinVar for evidence."
+    "</div>",
+    unsafe_allow_html=True,
 )
+with st.expander("How the tool works (simple explanation)"):
+    st.write(
+        "You upload a PDF medical report. The app reads the text, finds key patient details, "
+        "and tries to list any gene/variant findings. If a local LLM or Groq is enabled, "
+        "it helps structure the data. The result is shown in tables and can be downloaded."
+    )
+    st.caption("Example output (simplified):")
+    st.code(
+        '{\n'
+        '  "source": "test_report.pdf",\n'
+        '  "patient_info": {\n'
+        '    "patient_name": "Mr. ABHISHEK SRIVASTAVA",\n'
+        '    "age": "26 Years",\n'
+        '    "sex": "Male",\n'
+        '    "disease_name": null,\n'
+        '    "clinical_background_full": null,\n'
+        '    "date_received": "15/1/2026 12:35:00PM",\n'
+        '    "interpretation": null,\n'
+        '    "exon": null,\n'
+        '    "nucleotide_change": null,\n'
+        '    "clinvar_ids": null,\n'
+        '    "pubmed_ids": null,\n'
+        '    "clinical_relevance": null,\n'
+        '    "_sources": null\n'
+        '  },\n'
+        '  "variants": [],\n'
+        '  "variants_count": 0,\n'
+        '  "variants_truncated": false\n'
+        '}',
+        language="json",
+    )
+
+def _get_secret(key: str, default: str = "") -> str:
+    try:
+        return str(st.secrets.get(key, default))
+    except Exception:
+        return default
+
 
 with st.sidebar:
     st.header("Inputs")
+    app_url = st.text_input(
+        "App URL for share buttons",
+        value=_get_secret("APP_URL", DEFAULT_APP_URL),
+        key="app_url",
+    )
     default_backend = "Groq (cloud)" if os.environ.get("STREAMLIT_CLOUD") else "Ollama (local)"
     backend = st.selectbox(
         "LLM backend",
@@ -1270,9 +1471,19 @@ with st.sidebar:
         st.caption("If Ollama is running elsewhere, set OLLAMA_HOST or change this URL.")
         ollama_ok, _ = ollama_health(base_url)
         if ollama_ok:
-            st.success("Ollama: reachable")
+            st.markdown(
+                "<div style='padding:10px 12px; border-radius:10px; background:#e6fffb; "
+                "border:1px solid #99f6e4; font-weight:700; color:#0f172a;'>"
+                "✅ Ollama: reachable</div>",
+                unsafe_allow_html=True,
+            )
         else:
-            st.error("Ollama: not reachable")
+            st.markdown(
+                "<div style='padding:10px 12px; border-radius:10px; background:#fff1f2; "
+                "border:1px solid #fecdd3; font-weight:700; color:#7f1d1d;'>"
+                "⚠️ Ollama: not reachable</div>",
+                unsafe_allow_html=True,
+            )
             st.caption("Start it with `ollama serve`, then refresh this page.")
         models = ollama_list_models(base_url)
         if models:
@@ -1311,6 +1522,25 @@ if use_groq:
     st.warning("Groq backend sends report text to a cloud API.")
 if not enable_external:
     st.warning("External lookups are disabled. PubMed/ClinVar/ProteinPaint/cBioPortal sections are hidden.")
+
+app_url_value = st.session_state.get("app_url", "").strip()
+if app_url_value:
+    share_text = "Check out this clinical report analyzer."
+    col_left, col_right = st.columns([4, 1])
+    with col_right:
+        st.markdown(
+            f"""
+            <div style="display:flex; gap:8px; justify-content:flex-end;">
+              <a href="https://www.linkedin.com/sharing/share-offsite/?url={app_url_value}" target="_blank" rel="noreferrer">
+                LinkedIn
+              </a>
+              <a href="https://twitter.com/intent/tweet?url={app_url_value}&text={share_text}" target="_blank" rel="noreferrer">
+                X
+              </a>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 tab_single, tab_multi, tab_chat = st.tabs(["Single File", "Multiple Files", "Chat"])
 
@@ -1749,9 +1979,18 @@ with tab_multi:
                     "mark": "rect",
                     "selection": {"grid": {"type": "interval", "bind": "scales"}},
                     "encoding": {
-                        "x": {"field": "GeneVariant", "type": "nominal", "axis": {"labelAngle": -45}},
-                        "y": {"field": "Patient", "type": "nominal"},
-                        "color": {"field": "VAF", "type": "quantitative", "scale": {"scheme": "viridis"}},
+                        "x": {
+                            "field": "GeneVariant",
+                            "type": "nominal",
+                            "axis": {"labelAngle": -45, "labelColor": "black", "titleColor": "black"},
+                        },
+                        "y": {"field": "Patient", "type": "nominal", "axis": {"labelColor": "black", "titleColor": "black"}},
+                        "color": {
+                            "field": "VAF",
+                            "type": "quantitative",
+                            "scale": {"scheme": "viridis"},
+                            "legend": {"labelColor": "black", "titleColor": "black"},
+                        },
                         "tooltip": [
                             {"field": "Patient", "type": "nominal"},
                             {"field": "GeneVariant", "type": "nominal"},
@@ -1760,6 +1999,7 @@ with tab_multi:
                     },
                     "width": heatmap_width,
                     "height": heatmap_height,
+                    "background": "white",
                 }
                 st.vega_lite_chart(heatmap_data, spec, use_container_width=False)
                 vega_spec = dict(spec)
@@ -1897,4 +2137,4 @@ with tab_chat:
         st.session_state.chat_messages.append({"role": "assistant", "content": response})
 
 st.markdown("---")
-st.caption("This tool is made for report interpretation.")
+st.caption("This tool is made for the report interpretation.")
