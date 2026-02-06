@@ -946,6 +946,31 @@ def groq_chat(
     return resp.choices[0].message.content or ""
 
 
+def llm_chat_completion(
+    backend: str,
+    model: str,
+    base_url: str,
+    groq_api_key: Optional[str],
+    messages: List[Dict[str, str]],
+    temperature: float = 0.1,
+) -> str:
+    if backend == "groq":
+        if not groq_api_key:
+            raise ValueError("GROQ_API_KEY is not set")
+        return groq_chat(
+            api_key=groq_api_key,
+            model=model,
+            messages=messages,
+            temperature=temperature,
+        )
+    return ollama_chat(
+        model=model,
+        messages=messages,
+        base_url=base_url,
+        temperature=temperature,
+    )
+
+
 @st.cache_data(show_spinner=False)
 def ollama_chat(
     model: str,
@@ -1206,8 +1231,16 @@ def llm_extract(
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title(APP_TITLE)
-st.caption("Authors: Mukesh Kumar, Surabhi Seth")
 st.markdown(
+    "<div style='line-height:1.2;'>"
+    "<strong>Contact Authors: Mukesh Kumar, Surabhi Seth</strong><br/>"
+    "<strong>Email ID: sainimuk77@gmail.com</strong><br/>"
+    "<strong>Medical Oncology, AIIMS, New Delhi, India</strong>"
+    "</div>",
+    unsafe_allow_html=True,
+)
+st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+st.info(
     "Upload clinical report PDFs to extract gene/variant details using a local LLM, "
     "then optionally search PubMed and ClinVar for evidence."
 )
@@ -1279,7 +1312,7 @@ if use_groq:
 if not enable_external:
     st.warning("External lookups are disabled. PubMed/ClinVar/ProteinPaint/cBioPortal sections are hidden.")
 
-tab_single, tab_multi = st.tabs(["Single File", "Multiple Files"])
+tab_single, tab_multi, tab_chat = st.tabs(["Single File", "Multiple Files", "Chat"])
 
 
 def _extract_with_fallback(text: str) -> Tuple[Dict[str, str], List[Dict[str, str]]]:
@@ -1359,6 +1392,11 @@ with tab_single:
         else:
             with st.spinner("Extracting structured data..."):
                 info, variant_blocks = _extract_with_fallback(text)
+                st.session_state.last_report = {
+                    "patient_info": info,
+                    "variants": variant_blocks,
+                    "source": pdf_name or "",
+                }
 
             st.subheader("Patient Short Summary")
             summary_row = {
@@ -1543,6 +1581,11 @@ with tab_multi:
                 st.warning(f"No text extracted from {up.name}")
                 continue
             info, variant_blocks = _extract_with_fallback(text)
+            st.session_state.last_report = {
+                "patient_info": info,
+                "variants": variant_blocks,
+                "source": up.name,
+            }
             patient_name = info.get("patient_name") or up.name
             all_summary_rows.append(
                 {
@@ -1718,7 +1761,7 @@ with tab_multi:
                     "width": heatmap_width,
                     "height": heatmap_height,
                 }
-                st.vega_lite_chart(heatmap_data, spec, use_container_width=True)
+                st.vega_lite_chart(heatmap_data, spec, use_container_width=False)
                 vega_spec = dict(spec)
                 vega_spec["data"] = {"values": heatmap_data}
                 html_payload = f"""<!doctype html>
@@ -1783,6 +1826,75 @@ with tab_multi:
             st.info("No variants to display.")
     else:
         st.info("Upload one or more PDFs to begin.")
+
+with tab_chat:
+    st.subheader("Chatbot")
+    st.caption("Ask questions about extracted reports or general workflow guidance.")
+    if not st.session_state.get("last_report"):
+        st.info("No report context yet. Upload a PDF in the other tabs to enable report-aware chat.")
+    if use_groq and not groq_api_key:
+        st.info("Add your Groq API key in the sidebar to enable cloud chat.")
+    if not use_groq:
+        base_url_ok, _ = ollama_health(base_url)
+        if not base_url_ok:
+            st.info("Ollama is not reachable. Start `ollama serve` or switch to Groq.")
+
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant for medical report extraction and analysis.",
+            }
+        ]
+
+    for msg in st.session_state.chat_messages:
+        if msg["role"] == "system":
+            continue
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+
+    user_prompt = st.chat_input("Ask a question")
+    if user_prompt:
+        st.session_state.chat_messages.append({"role": "user", "content": user_prompt})
+        with st.chat_message("user"):
+            st.write(user_prompt)
+        with st.chat_message("assistant"):
+            try:
+                messages = list(st.session_state.chat_messages)
+                last_report = st.session_state.get("last_report")
+                if last_report:
+                    pi = last_report.get("patient_info", {})
+                    variants = last_report.get("variants", [])
+                    source = last_report.get("source", "")
+                    max_variants = 200
+                    truncated = len(variants) > max_variants
+                    context = {
+                        "source": source,
+                        "patient_info": pi,
+                        "variants": variants[:max_variants],
+                        "variants_count": len(variants),
+                        "variants_truncated": truncated,
+                    }
+                    messages.insert(
+                        1,
+                        {
+                            "role": "system",
+                            "content": "Context from last extracted report (JSON): "
+                            + json.dumps(context, ensure_ascii=True),
+                        },
+                    )
+                response = llm_chat_completion(
+                    backend="groq" if use_groq else "ollama",
+                    model=model,
+                    base_url=base_url,
+                    groq_api_key=groq_api_key,
+                    messages=messages,
+                    temperature=temperature,
+                )
+            except Exception as e:
+                response = f"Chat failed: {e}"
+            st.write(response)
+        st.session_state.chat_messages.append({"role": "assistant", "content": response})
 
 st.markdown("---")
 st.caption("This tool is made for report interpretation.")
