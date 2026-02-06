@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict
 
 import requests
+from groq import Groq
 import streamlit as st
 import streamlit.components.v1 as components
 try:
@@ -32,6 +33,7 @@ except Exception:  # pragma: no cover
 APP_TITLE = "ClinPDF-Report Analyzer"
 CBIO_BASE = "https://www.cbioportal.org"
 DEFAULT_OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+DEFAULT_GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
 DEFAULT_MODEL = "llama3.1:70b"
 DEFAULT_MAX_CHARS = 16000
 
@@ -924,6 +926,21 @@ def _select_quality_model(models: List[str]) -> Optional[str]:
     return models[0]
 
 
+def groq_chat(
+    api_key: str,
+    model: str,
+    messages: List[Dict[str, str]],
+    temperature: float = 0.1,
+) -> str:
+    client = Groq(api_key=api_key)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+    )
+    return resp.choices[0].message.content or ""
+
+
 @st.cache_data(show_spinner=False)
 def ollama_chat(
     model: str,
@@ -1090,6 +1107,8 @@ def llm_extract(
     max_chars: int = DEFAULT_MAX_CHARS,
     retries: int = 1,
     temperature: float = 0.1,
+    backend: str = "ollama",
+    groq_api_key: Optional[str] = None,
 ) -> Dict[str, object]:
     llm_text = _prepare_llm_input(text, max_chars=max_chars)
     system = (
@@ -1150,15 +1169,26 @@ def llm_extract(
                 "\n\nIMPORTANT: Your previous response was invalid. "
                 "Return ONLY valid JSON with the exact schema and no extra text."
             )
-        content = ollama_chat(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user + extra},
-            ],
-            base_url=base_url,
-            temperature=temperature,
-        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user + extra},
+        ]
+        if backend == "groq":
+            if not groq_api_key:
+                raise ValueError("GROQ_API_KEY is not set")
+            content = groq_chat(
+                api_key=groq_api_key,
+                model=model,
+                messages=messages,
+                temperature=temperature,
+            )
+        else:
+            content = ollama_chat(
+                model=model,
+                messages=messages,
+                base_url=base_url,
+                temperature=temperature,
+            )
         raw = content.strip()
         try:
             return _parse_llm_json(raw)
@@ -1179,24 +1209,34 @@ st.markdown(
 
 with st.sidebar:
     st.header("Inputs")
-    base_url = st.text_input("Ollama base URL", value=DEFAULT_OLLAMA_URL)
-    st.caption("If Ollama is running elsewhere, set OLLAMA_HOST or change this URL.")
-    ollama_ok, ollama_err = ollama_health(base_url)
-    if ollama_ok:
-        st.success("Ollama: reachable")
+    backend = st.selectbox("LLM backend", ["Ollama (local)", "Groq (cloud)"])
+    use_groq = backend.startswith("Groq")
+    if use_groq:
+        groq_api_key = st.text_input("GROQ_API_KEY", value=os.environ.get("GROQ_API_KEY", ""), type="password")
+        model = st.text_input("Groq model", value=DEFAULT_GROQ_MODEL)
+        base_url = DEFAULT_OLLAMA_URL
+        if groq_api_key:
+            st.success("Groq key set")
+        else:
+            st.error("Groq key missing")
     else:
-        st.error("Ollama: not reachable")
-        st.caption("Start it with `ollama serve`, then refresh this page.")
-    models = ollama_list_models(base_url)
-    if models:
-        quality_model = _select_quality_model(models)
-        default_index = models.index(quality_model) if quality_model in models else 0
-        model = st.selectbox("Model", models, index=default_index)
-    else:
-        model = st.text_input("Model", value=DEFAULT_MODEL)
-    use_llm = st.checkbox("Use local LLM extraction", value=ollama_ok)
-    if use_llm and not ollama_ok:
-        st.warning("LLM extraction is enabled but Ollama is not reachable.")
+        base_url = st.text_input("Ollama base URL", value=DEFAULT_OLLAMA_URL)
+        st.caption("If Ollama is running elsewhere, set OLLAMA_HOST or change this URL.")
+        ollama_ok, _ = ollama_health(base_url)
+        if ollama_ok:
+            st.success("Ollama: reachable")
+        else:
+            st.error("Ollama: not reachable")
+            st.caption("Start it with `ollama serve`, then refresh this page.")
+        models = ollama_list_models(base_url)
+        if models:
+            quality_model = _select_quality_model(models)
+            default_index = models.index(quality_model) if quality_model in models else 0
+            model = st.selectbox("Model", models, index=default_index)
+        else:
+            model = st.text_input("Model", value=DEFAULT_MODEL)
+        groq_api_key = None
+    use_llm = st.checkbox("Use LLM extraction", value=True)
     max_chars = st.slider("LLM input max chars", 3000, 30000, DEFAULT_MAX_CHARS, 1000)
     llm_retries = st.slider("LLM JSON retries", 0, 2, 1, 1)
     temperature = st.slider("LLM temperature", 0.0, 0.5, 0.0, 0.1)
@@ -1214,10 +1254,12 @@ with st.sidebar:
     st.caption("Tip: use a specific variant query like `PTPN11 p.Gly503Ala` for precision.")
 
 st.info(
-    "LLM inference runs locally via Ollama. No report content is sent to external services. "
-    "External lookups (PubMed/ClinVar/ProteinPaint/cBioPortal) only use gene/variant queries "
+    "LLM inference can run locally via Ollama. External lookups "
+    "(PubMed/ClinVar/ProteinPaint/cBioPortal) only use gene/variant queries "
     "and can be disabled in the sidebar."
 )
+if use_groq:
+    st.warning("Groq backend sends report text to a cloud API.")
 if not enable_external:
     st.warning("External lookups are disabled. PubMed/ClinVar/ProteinPaint/cBioPortal sections are hidden.")
 
@@ -1264,6 +1306,8 @@ def _extract_with_fallback(text: str) -> Tuple[Dict[str, str], List[Dict[str, st
             max_chars=max_chars,
             retries=llm_retries,
             temperature=temperature,
+            backend="groq" if use_groq else "ollama",
+            groq_api_key=groq_api_key,
         )
     except Exception as e:
         st.warning(f"LLM extraction failed, using regex fallback. Error: {e}")
