@@ -1214,7 +1214,12 @@ st.markdown(
 
 with st.sidebar:
     st.header("Inputs")
-    backend = st.selectbox("LLM backend", ["Ollama (local)", "Groq (cloud)"])
+    default_backend = "Groq (cloud)" if os.environ.get("STREAMLIT_CLOUD") else "Ollama (local)"
+    backend = st.selectbox(
+        "LLM backend",
+        ["Ollama (local)", "Groq (cloud)"],
+        index=0 if default_backend == "Ollama (local)" else 1,
+    )
     use_groq = backend.startswith("Groq")
     if use_groq:
         groq_api_key = st.text_input("GROQ_API_KEY", value=os.environ.get("GROQ_API_KEY", ""), type="password")
