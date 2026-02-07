@@ -6,3 +6,4 @@ pillow
 vl-convert-python
 cairosvg
 groq
+python-docx

@@ -31,13 +31,28 @@ try:
     import pytesseract  # optional OCR
 except Exception:  # pragma: no cover
     pytesseract = None
+try:
+    import docx  # python-docx for .docx files
+except Exception:  # pragma: no cover
+    docx = None
 
 
-APP_TITLE = "ClinPDF-Report Analyzer"
+APP_TITLE = "ClinDoc-Report Analyzer"
 CBIO_BASE = "https://www.cbioportal.org"
 DEFAULT_OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 DEFAULT_GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 DEFAULT_APP_URL = os.environ.get("APP_URL", "")
+DEFAULT_GUIDE_URL = os.environ.get("GUIDE_URL", "")
+DEFAULT_GITHUB_URL = os.environ.get(
+    "GITHUB_URL", "https://github.com/igibmukeshkumar/aiims-clinical-report-summary"
+)
+
+
+def _get_secret(key: str, default: str = "") -> str:
+    try:
+        return str(st.secrets.get(key, default))
+    except Exception:
+        return default
 DEFAULT_MODEL = "llama3.1:70b"
 DEFAULT_MAX_CHARS = 16000
 
@@ -191,7 +206,7 @@ PUBMED_REFS_RE = re.compile(r"PubMed References", re.IGNORECASE)
 
 
 @st.cache_data(show_spinner=False)
-def pdf_to_text_bytes(pdf_bytes: bytes) -> str:
+def pdf_to_text_bytes(pdf_bytes: bytes, enable_ocr: bool = True) -> str:
     # Primary: pdftotext if available
     try:
         proc = subprocess.run(
@@ -217,10 +232,46 @@ def pdf_to_text_bytes(pdf_bytes: bytes) -> str:
             t = page.extract_text()
             if t:
                 text_parts.append(t)
-            elif pytesseract is not None:
+            elif enable_ocr and pytesseract is not None:
                 img = page.to_image(resolution=300).original
                 text_parts.append(pytesseract.image_to_string(img))
     return "\n".join(text_parts)
+
+
+@st.cache_data(show_spinner=False)
+def docx_to_text_bytes(docx_bytes: bytes) -> str:
+    if docx is None:
+        return ""
+    try:
+        document = docx.Document(io.BytesIO(docx_bytes))
+        return "\n".join(p.text for p in document.paragraphs if p.text)
+    except Exception:
+        return ""
+
+
+@st.cache_data(show_spinner=False)
+def txt_to_text_bytes(txt_bytes: bytes) -> str:
+    try:
+        return txt_bytes.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def file_to_text(uploaded, enable_ocr: bool = True) -> Tuple[str, str, str]:
+    if uploaded is None:
+        return "", "", ""
+    name = uploaded.name or ""
+    data = uploaded.read()
+    lower = name.lower()
+    if lower.endswith(".pdf"):
+        return pdf_to_text_bytes(data, enable_ocr=enable_ocr), name, "pdf"
+    if lower.endswith(".docx"):
+        if docx is None:
+            return "", name, "docx_missing"
+        return docx_to_text_bytes(data), name, "docx"
+    if lower.endswith(".txt"):
+        return txt_to_text_bytes(data), name, "txt"
+    return "", name, "unknown"
 
 
 @st.cache_data(show_spinner=False)
@@ -1231,7 +1282,7 @@ def llm_extract(
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 st.title(APP_TITLE)
 st.markdown(
     "<div style='line-height:1.2;'>"
@@ -1266,6 +1317,9 @@ st.markdown(
     header[data-testid="stHeader"] * {
       color: var(--ink);
     }
+    [data-testid="stToolbar"] * {
+      color: var(--ink) !important;
+    }
 
     .stApp {
       background: radial-gradient(1200px 600px at 10% -10%, var(--bg-2), transparent),
@@ -1294,9 +1348,71 @@ st.markdown(
     }
 
     div[data-testid="stSidebar"] {
-      background: rgba(255, 255, 255, 0.9);
-      border-right: 1px solid var(--card-border);
-      backdrop-filter: blur(10px);
+      background: #0f172a;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    div[data-testid="stSidebar"] * {
+      color: #ffffff !important;
+    }
+    div[data-testid="stSidebar"] label,
+    div[data-testid="stSidebar"] span,
+    div[data-testid="stSidebar"] p {
+      color: #ffffff !important;
+    }
+    div[data-testid="stSidebar"] .stCaption,
+    div[data-testid="stSidebar"] .stMarkdown,
+    div[data-testid="stSidebar"] .stAlert {
+      color: #ffffff !important;
+    }
+    div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] * {
+      color: #ffffff !important;
+    }
+    div[data-testid="stSidebar"] .stSlider * {
+      color: #ffffff !important;
+    }
+    div[data-testid="stSidebar"] .stSelectbox * {
+      color: #ffffff !important;
+    }
+    div[data-testid="stSidebar"] .stTextInput * {
+      color: #ffffff !important;
+    }
+    div[data-testid="stSidebar"] [data-baseweb="select"] * {
+      color: #ffffff !important;
+    }
+    div[data-testid="stSidebar"] [data-baseweb="select"] svg {
+      fill: #ffffff !important;
+    }
+    div[data-testid="stSidebar"] [data-baseweb="input"] * {
+      color: #ffffff !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      div[data-testid="stSidebar"] {
+        background: #0b1220 !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      div[data-testid="stSidebar"] * {
+        color: #ffffff !important;
+      }
+      div[data-testid="stSidebar"] input,
+      div[data-testid="stSidebar"] textarea,
+      div[data-testid="stSidebar"] select {
+        color: #ffffff !important;
+        background: #111827 !important;
+        border-color: rgba(255, 255, 255, 0.15) !important;
+      }
+      div[data-testid="stSidebar"] [data-baseweb="select"] * {
+        color: #ffffff !important;
+      }
+      div[data-testid="stSidebar"] [data-baseweb="select"] svg {
+        fill: #ffffff !important;
+      }
+    }
+    div[data-testid="stSidebar"] input,
+    div[data-testid="stSidebar"] textarea,
+    div[data-testid="stSidebar"] select {
+      color: #0f172a !important;
+      background: #ffffff !important;
     }
 
     button[data-baseweb="tab"] {
@@ -1340,6 +1456,17 @@ st.markdown(
       border-radius: 10px;
       padding: 0.5rem 1rem;
     }
+    .stDownloadButton > button {
+      color: #0f172a !important;
+      background: #ffffff !important;
+      border: 1px solid rgba(15, 23, 42, 0.2) !important;
+    }
+    label[data-testid="stWidgetLabel"] {
+      color: var(--ink) !important;
+    }
+    .stSlider * {
+      color: var(--ink) !important;
+    }
     .share-bar {
       position: fixed;
       top: 12px;
@@ -1359,6 +1486,86 @@ st.markdown(
       box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
     }
     .share-bar a:hover {
+      background: #f1f5f9;
+    }
+    .share-linkedin {
+      position: fixed;
+      top: 120px;
+      right: 18px;
+      z-index: 9999;
+    }
+    .share-linkedin a {
+      text-decoration: none;
+      font-weight: 700;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid var(--card-border);
+      color: var(--ink);
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+    }
+    .share-linkedin a:hover {
+      background: #f1f5f9;
+    }
+    .share-twitter {
+      position: fixed;
+      top: 160px;
+      right: 18px;
+      z-index: 9999;
+    }
+    .share-twitter a {
+      text-decoration: none;
+      font-weight: 700;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid var(--card-border);
+      color: var(--ink);
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+    }
+    .share-twitter a:hover {
+      background: #f1f5f9;
+    }
+    .share-facebook {
+      position: fixed;
+      top: 200px;
+      right: 18px;
+      z-index: 9999;
+    }
+    .share-facebook a {
+      text-decoration: none;
+      font-weight: 700;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid var(--card-border);
+      color: var(--ink);
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+    }
+    .share-facebook a:hover {
+      background: #f1f5f9;
+    }
+    .github-link {
+      position: fixed;
+      top: 90px;
+      right: 18px;
+      z-index: 100000;
+    }
+    .github-link a {
+      text-decoration: none;
+      font-weight: 700;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid var(--card-border);
+      color: var(--ink);
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 16px;
+    }
+    .github-link a:hover {
       background: #f1f5f9;
     }
 
@@ -1397,9 +1604,51 @@ st.markdown(
 st.markdown(
     "<div style='padding:12px 14px; border-radius:12px; "
     "background:#ffe7d6; border:1px solid #f4bda0; color:#4b2316; font-weight:600;'>"
-    "Upload clinical report PDFs to extract gene/variant details using a local LLM, "
+    "Upload clinical report PDFs/DOCX/TXT to extract gene/variant details using a local LLM, "
     "then optionally search PubMed and ClinVar for evidence."
     "</div>",
+    unsafe_allow_html=True,
+)
+st.markdown("<div id='run-guide'></div>", unsafe_allow_html=True)
+with st.expander("Run Guide"):
+    st.markdown(
+        "Local: start `ollama serve`, then run `streamlit run llm_app.py`. "
+        "Cloud: set `GROQ_API_KEY` and select `Groq (cloud)`."
+    )
+share_app_url = _get_secret("APP_URL", DEFAULT_APP_URL)
+if share_app_url:
+    share_text = "Check out this clinical report analyzer."
+    st.markdown(
+        f"""
+        <div class="share-linkedin">
+          <a href="https://www.linkedin.com/sharing/share-offsite/?url={share_app_url}" target="_blank" rel="noreferrer">
+            LinkedIn
+          </a>
+        </div>
+        <div class="share-twitter">
+          <a href="https://twitter.com/intent/tweet?url={share_app_url}&text={share_text}" target="_blank" rel="noreferrer">
+            X
+          </a>
+        </div>
+        <div class="share-facebook">
+          <a href="https://www.facebook.com/sharer/sharer.php?u={share_app_url}" target="_blank" rel="noreferrer">
+            Facebook
+          </a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+st.markdown(
+    f"""
+    <div class="github-link">
+      <a href="{DEFAULT_GITHUB_URL}" target="_blank" rel="noreferrer">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+          <path fill="currentColor" d="M8 0.2a7.8 7.8 0 0 0-2.47 15.2c.39.07.53-.17.53-.38v-1.33c-2.16.47-2.62-1.04-2.62-1.04-.35-.9-.86-1.13-.86-1.13-.7-.48.05-.47.05-.47.78.06 1.19.8 1.19.8.69 1.18 1.82.84 2.27.64.07-.5.27-.84.49-1.03-1.73-.2-3.56-.86-3.56-3.83 0-.85.3-1.55.8-2.1-.08-.2-.35-1 .08-2.08 0 0 .65-.2 2.12.8a7.3 7.3 0 0 1 3.86 0c1.47-1 2.12-.8 2.12-.8.43 1.08.16 1.88.08 2.08.5.55.8 1.25.8 2.1 0 2.98-1.83 3.62-3.57 3.82.28.24.53.72.53 1.45v2.15c0 .21.14.45.53.38A7.8 7.8 0 0 0 8 .2z"/>
+        </svg>
+        GitHub
+      </a>
+    </div>
+    """,
     unsafe_allow_html=True,
 )
 with st.expander("How the tool works (simple explanation)"):
@@ -1434,20 +1683,9 @@ with st.expander("How the tool works (simple explanation)"):
         language="json",
     )
 
-def _get_secret(key: str, default: str = "") -> str:
-    try:
-        return str(st.secrets.get(key, default))
-    except Exception:
-        return default
-
-
 with st.sidebar:
     st.header("Inputs")
-    app_url = st.text_input(
-        "App URL for share buttons",
-        value=_get_secret("APP_URL", DEFAULT_APP_URL),
-        key="app_url",
-    )
+    app_url = _get_secret("APP_URL", DEFAULT_APP_URL)
     default_backend = "Groq (cloud)" if os.environ.get("STREAMLIT_CLOUD") else "Ollama (local)"
     backend = st.selectbox(
         "LLM backend",
@@ -1497,9 +1735,11 @@ with st.sidebar:
         st.info("Add your own Groq API key above to enable cloud LLM extraction.")
     use_llm_default = bool(groq_api_key) if use_groq else True
     use_llm = st.checkbox("Use LLM extraction", value=use_llm_default)
+    fast_mode = st.checkbox("Fast mode (skip OCR, reduce LLM workload)", value=False)
+    enable_ocr = st.checkbox("Enable OCR for scanned PDFs", value=not fast_mode)
     max_chars = st.slider("LLM input max chars", 3000, 30000, DEFAULT_MAX_CHARS, 1000)
     llm_retries = st.slider("LLM JSON retries", 0, 2, 1, 1)
-    temperature = st.slider("LLM temperature", 0.0, 0.5, 0.0, 0.1)
+    temperature = st.slider("LLM temperature (lower = more deterministic)", 0.0, 0.5, 0.0, 0.1)
     enable_external = st.checkbox(
         "Enable external lookups (PubMed/ClinVar/ProteinPaint/cBioPortal)",
         value=True,
@@ -1604,21 +1844,22 @@ def _extract_with_fallback(text: str) -> Tuple[Dict[str, str], List[Dict[str, st
 
 
 with tab_single:
-    uploaded = st.file_uploader("Upload a PDF", type=["pdf"], key="single_upload")
+    uploaded = st.file_uploader("Upload a PDF/DOCX/TXT", type=["pdf", "docx", "txt"], key="single_upload")
 
-    pdf_bytes = None
     pdf_name = None
 
     if uploaded is not None:
-        pdf_bytes = uploaded.read()
         pdf_name = uploaded.name
 
-    if pdf_bytes:
-        with st.spinner("Extracting text from PDF..."):
-            text = pdf_to_text_bytes(pdf_bytes)
+    if uploaded is not None:
+        with st.spinner("Extracting text from file..."):
+            text, _, status = file_to_text(uploaded, enable_ocr=enable_ocr)
 
         if not text.strip():
-            st.warning("No text could be extracted. If this is a scanned PDF, OCR is required.")
+            if status == "docx_missing":
+                st.warning("DOCX support requires `python-docx`. Please install it and retry.")
+            else:
+                st.warning("No text could be extracted. If this is a scanned PDF, OCR is required.")
         else:
             with st.spinner("Extracting structured data..."):
                 info, variant_blocks = _extract_with_fallback(text)
@@ -1795,20 +2036,23 @@ with tab_single:
                             for r in cresults:
                                 st.markdown(f"**{r['title']}**  \\\nClinVar ID: {r['clinvar_id']}  \\\n{r['url']}")
     else:
-        st.info("Provide a PDF to begin.")
+        st.info("Provide a PDF/DOCX/TXT to begin.")
 
 with tab_multi:
     uploaded_files = st.file_uploader(
-        "Upload multiple PDFs", type=["pdf"], accept_multiple_files=True, key="multi_upload"
+        "Upload multiple PDFs/DOCX/TXT", type=["pdf", "docx", "txt"], accept_multiple_files=True, key="multi_upload"
     )
     if uploaded_files:
         all_summary_rows = []
         all_variant_rows = []
         for up in uploaded_files:
             with st.spinner(f"Extracting {up.name}..."):
-                text = pdf_to_text_bytes(up.read())
+                text, _, status = file_to_text(up, enable_ocr=enable_ocr)
             if not text.strip():
-                st.warning(f"No text extracted from {up.name}")
+                if status == "docx_missing":
+                    st.warning(f"DOCX support requires `python-docx` for {up.name}")
+                else:
+                    st.warning(f"No text extracted from {up.name}")
                 continue
             info, variant_blocks = _extract_with_fallback(text)
             st.session_state.last_report = {
@@ -1972,8 +2216,11 @@ with tab_multi:
             st.subheader("VAF Heatmap")
             heatmap_data = _build_heatmap_data(all_variant_rows)
             if heatmap_data:
-                heatmap_height = st.slider("Heatmap height", 200, 1000, 400, 50, key="heatmap_height")
-                heatmap_width = st.slider("Heatmap width", 300, 2000, 900, 50, key="heatmap_width")
+                col_h, col_w = st.columns(2)
+                with col_h:
+                    heatmap_height = st.slider("Heatmap height", 200, 1000, 400, 50, key="heatmap_height")
+                with col_w:
+                    heatmap_width = st.slider("Heatmap width", 300, 2000, 900, 50, key="heatmap_width")
                 st.caption("Interactive heatmap. Hover to see values. Scroll to pan.")
                 spec = {
                     "mark": "rect",
@@ -2059,7 +2306,7 @@ with tab_multi:
                         except Exception:
                             st.info("PDF export unavailable.")
                 else:
-                    st.info("PNG/PDF export requires `vl-convert-python` (and `cairosvg` for PDF).")
+                    st.caption("PNG/PDF export requires `vl-convert-python` (and `cairosvg` for PDF).")
             else:
                 st.info("Heatmap unavailable (no VAF values).")
         else:
@@ -2071,7 +2318,7 @@ with tab_chat:
     st.subheader("Chatbot")
     st.caption("Ask questions about extracted reports or general workflow guidance.")
     if not st.session_state.get("last_report"):
-        st.info("No report context yet. Upload a PDF in the other tabs to enable report-aware chat.")
+        st.info("No report context yet. Upload a PDF/DOCX/TXT in the other tabs to enable report-aware chat.")
     if use_groq and not groq_api_key:
         st.info("Add your Groq API key in the sidebar to enable cloud chat.")
     if not use_groq:
